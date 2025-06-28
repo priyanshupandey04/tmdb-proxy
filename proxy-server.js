@@ -10,20 +10,31 @@ dotenv.config();
 const app = express();
 app.use(cors());
 app.use(express.json()); // to parse JSON bodies on POST/DELETE
-const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
+
+// Cache: 2 days TTL
+const cache = new NodeCache({ stdTTL: 172800, checkperiod: 3600 });
+
 const API_KEY = `Bearer ${process.env.TMDB_TOKEN}`;
 const TMDB_BASE = "https://api.themoviedb.org";
-let ytIndex = 0; // Global counter to rotate keys
 
+let ytIndex = 0; // Global counter to rotate keys
 const youtubeApiKeys = process.env.YOUTUBE_API_KEYS.split(",");
 
-// YouTube Search Proxy
+// -------------------
+// 🎬 YouTube Search Proxy (with Caching)
+// -------------------
 app.get("/yt-search", async (req, res) => {
   try {
     const query = req.query.query;
     if (!query) return res.status(400).json({ error: "Missing query" });
 
-    // Use next API key
+    const cacheKey = `yt:${query.trim().toLowerCase()}`;
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      console.log("📥 YT Cache hit:", query);
+      return res.json(cached);
+    }
+
     const apiKey = youtubeApiKeys[ytIndex % youtubeApiKeys.length];
     ytIndex++;
 
@@ -34,8 +45,14 @@ app.get("/yt-search", async (req, res) => {
     ytUrl.searchParams.set("maxResults", "1");
     ytUrl.searchParams.set("key", apiKey);
 
+    console.log("🔎 YouTube Searching:", query);
     const ytRes = await fetch(ytUrl.toString());
     const data = await ytRes.json();
+
+    // Cache if valid result
+    if (ytRes.ok && data?.items?.length > 0) {
+      cache.set(cacheKey, data);
+    }
 
     res.status(ytRes.status).json(data);
   } catch (err) {
@@ -44,27 +61,24 @@ app.get("/yt-search", async (req, res) => {
   }
 });
 
-// This will catch anything under /api/*
+// -------------------
+// 🎬 TMDB Proxy Handler
+// -------------------
 app.all("/api/*", async (req, res) => {
   try {
-    // Build the target URL
-    // req.path is "/api/3/movie/now_playing"
     const tmdbPath = req.path.replace(/^\/api/, "");
     const url = new URL(`${TMDB_BASE}${tmdbPath}`);
-    // Copy query params
     Object.entries(req.query).forEach(([k, v]) => url.searchParams.set(k, v));
 
-    // Cache key for GETs only
     const cacheKey = `${req.method}:${url.toString()}`;
     if (req.method === "GET") {
       const cached = cache.get(cacheKey);
       if (cached) {
-        console.log("📥 Cache hit for", cacheKey);
+        console.log("📥 TMDB Cache hit:", cacheKey);
         return res.json(cached);
       }
     }
 
-    // Forward the request
     const options = {
       method: req.method,
       headers: {
@@ -72,29 +86,30 @@ app.all("/api/*", async (req, res) => {
         Authorization: API_KEY,
       },
     };
-    // Include JSON body for POST/DELETE
+
     if (req.method !== "GET" && req.body) {
       options.headers["Content-Type"] = "application/json";
       options.body = JSON.stringify(req.body);
     }
 
-    console.log("🌐 Proxying to", url.toString());
+    console.log("🌐 TMDB Proxying to:", url.toString());
     const tmdbRes = await fetch(url.toString(), options);
     const data = await tmdbRes.json();
 
-    // Cache GET response
     if (req.method === "GET" && tmdbRes.ok) {
       cache.set(cacheKey, data);
     }
 
     res.status(tmdbRes.status).json(data);
   } catch (err) {
-    console.error("❌ Proxy error:", err.message);
+    console.error("❌ TMDB Proxy error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Healthcheck/root
+// -------------------
+// 🩺 Health Check
+// -------------------
 app.get("/", (_, res) => res.send("TMDB proxy is running"));
 
 const port = process.env.PORT || 3000;
