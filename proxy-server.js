@@ -9,10 +9,40 @@ import { URL } from "url";
 dotenv.config();
 const app = express();
 app.use(cors());
-app.use(express.json());           // to parse JSON bodies on POST/DELETE
+app.use(express.json()); // to parse JSON bodies on POST/DELETE
 const cache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
 const API_KEY = `Bearer ${process.env.TMDB_TOKEN}`;
 const TMDB_BASE = "https://api.themoviedb.org";
+let ytIndex = 0; // Global counter to rotate keys
+
+const youtubeApiKeys = process.env.YOUTUBE_API_KEYS.split(",");
+
+// YouTube Search Proxy
+app.get("/yt-search", async (req, res) => {
+  try {
+    const query = req.query.query;
+    if (!query) return res.status(400).json({ error: "Missing query" });
+
+    // Use next API key
+    const apiKey = youtubeApiKeys[ytIndex % youtubeApiKeys.length];
+    ytIndex++;
+
+    const ytUrl = new URL("https://www.googleapis.com/youtube/v3/search");
+    ytUrl.searchParams.set("part", "snippet");
+    ytUrl.searchParams.set("q", query);
+    ytUrl.searchParams.set("type", "video");
+    ytUrl.searchParams.set("maxResults", "1");
+    ytUrl.searchParams.set("key", apiKey);
+
+    const ytRes = await fetch(ytUrl.toString());
+    const data = await ytRes.json();
+
+    res.status(ytRes.status).json(data);
+  } catch (err) {
+    console.error("❌ YouTube search error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // This will catch anything under /api/*
 app.all("/api/*", async (req, res) => {
