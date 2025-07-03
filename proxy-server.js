@@ -42,7 +42,7 @@ app.get("/yt-search", async (req, res) => {
     ytUrl.searchParams.set("part", "snippet");
     ytUrl.searchParams.set("q", query);
     ytUrl.searchParams.set("type", "video");
-    ytUrl.searchParams.set("maxResults", "1");
+    ytUrl.searchParams.set("maxResults", "100");
     ytUrl.searchParams.set("key", apiKey);
 
     console.log("🔎 YouTube Searching:", query);
